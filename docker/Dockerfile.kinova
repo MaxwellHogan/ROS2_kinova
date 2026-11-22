@@ -1,0 +1,191 @@
+
+# syntax=docker/dockerfile:1.7
+
+# ROS 2 Humble - Ubuntu 22.04
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# -------------------------------------------------
+# 1. ROS 2, Gazebo and development tools
+# -------------------------------------------------
+RUN apt-get update && apt-get install -y \
+    ros-humble-desktop \
+    ros-humble-ros-gz \
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-ign-ros2-control \
+    build-essential \
+    python3-colcon-common-extensions \
+    python3-pip \
+    python3-opencv \
+    python3-numpy \
+    python3-matplotlib \
+    python3-scipy \
+    && rm -rf /var/lib/apt/lists/*
+
+# -------------------------------------------------
+# 2. Kinova Gen3 6-DOF and MoveIt 2
+# -------------------------------------------------
+RUN apt-get update && apt-get install -y \
+    ros-humble-kortex-bringup \
+    ros-humble-kinova-gen3-6dof-robotiq-2f-85-moveit-config \
+    ros-humble-rmw-cyclonedds-cpp \
+    && rm -rf /var/lib/apt/lists/*
+
+# -------------------------------------------------
+# 3. Kinova / Robotiq compatibility fix
+#
+# Remove unsupported Isaac Sim arguments from
+# the nested Robotiq macro invocation.
+# These are unnecessary for Gazebo Fortress.
+# -------------------------------------------------
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/opt/ros/humble/share/kortex_description/"
+    "grippers/robotiq_2f_85/urdf/"
+    "robotiq_2f_85_macro.xacro"
+)
+
+content = path.read_text()
+
+old = (
+    'sim_isaac="${sim_isaac}"\n'
+    '        isaac_joint_commands="${isaac_joint_commands}"\n'
+    '        isaac_joint_states="${isaac_joint_states}"'
+)
+
+new = 'sim_isaac="${sim_isaac}"'
+
+if content.count(old) != 1:
+    raise RuntimeError(
+        "Kinova Xacro patch target not found. "
+        "Check installed package version."
+    )
+
+path.write_text(content.replace(old, new))
+
+print("Kinova Robotiq compatibility fix applied.")
+PY
+
+# -------------------------------------------------
+# 3b. Fix Robotiq mimic joints for fake hardware
+#
+# The five dependent joints should expose state
+# interfaces, but not position command interfaces.
+# GenericSystem handles their mimic relationships.
+# -------------------------------------------------
+RUN python3 - <<'PY'
+from pathlib import Path
+import re
+
+path = Path(
+    "/opt/ros/humble/share/robotiq_description/"
+    "urdf/robotiq_gripper.ros2_control.xacro"
+)
+
+content = path.read_text()
+
+mimic_joints = [
+    "robotiq_85_right_knuckle_joint",
+    "robotiq_85_left_inner_knuckle_joint",
+    "robotiq_85_right_inner_knuckle_joint",
+    "robotiq_85_left_finger_tip_joint",
+    "robotiq_85_right_finger_tip_joint",
+]
+
+for name in mimic_joints:
+    pattern = (
+        r'(<joint\s+name="\$\{prefix\}' + re.escape(name) +
+        r'"\s*>)(.*?)(</joint>)'
+    )
+
+    def patch_joint(match):
+        body = match.group(2)
+
+        updated, count = re.subn(
+            r'<command_interface\s+name="position"\s*/>',
+            '',
+            body
+        )
+
+        if count != 1:
+            raise RuntimeError(
+                f"Expected one command interface in {name}, "
+                f"found {count}"
+            )
+
+        return match.group(1) + updated + match.group(3)
+
+    content, count = re.subn(
+        pattern,
+        patch_joint,
+        content,
+        flags=re.DOTALL
+    )
+
+    if count != 1:
+        raise RuntimeError(
+            f"Expected one definition of {name}, found {count}"
+        )
+
+    print(f"Patched: {name}")
+
+path.write_text(content)
+print("Robotiq fake-hardware mimic joint fix applied.")
+PY
+
+# -------------------------------------------------
+# Fix duplicate Kortex gripper interface in fake mode
+# -------------------------------------------------
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/opt/ros/humble/share/kortex_description/"
+    "arms/gen3/6dof/urdf/kortex.ros2_control.xacro"
+)
+
+content = path.read_text()
+
+old = '<xacro:if value="${use_internal_bus_gripper_comm}">'
+new = '<xacro:if value="${use_internal_bus_gripper_comm and not use_fake_hardware}">'
+
+if content.count(old) != 1:
+    raise RuntimeError(
+        "Expected Kortex gripper condition not found exactly once"
+    )
+
+content = content.replace(old, new)
+path.write_text(content)
+
+print("Kortex fake-hardware gripper duplication fix applied")
+PY
+
+
+# -------------------------------------------------
+# 4. Validate Kinova robot description
+# -------------------------------------------------
+RUN bash -c '\
+    source /opt/ros/humble/setup.bash && \
+    ros2 run xacro xacro \
+      /opt/ros/humble/share/kortex_description/robots/kinova.urdf.xacro \
+      name:=kinova \
+      arm:=gen3 \
+      dof:=6 \
+      gripper:=robotiq_2f_85 \
+      sim_ignition:=true \
+      > /tmp/kinova_test.urdf && \
+    test -s /tmp/kinova_test.urdf && \
+    rm /tmp/kinova_test.urdf \
+'
+
+# -------------------------------------------------
+# 5. ROS 2 environment
+# -------------------------------------------------
+RUN echo "source /opt/ros/humble/setup.bash" \
+    >> /root/.bashrc
+
+WORKDIR /ros2_ws
