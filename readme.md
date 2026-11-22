@@ -12,7 +12,7 @@ Before starting, make sure you have installed the following software on your com
 - [Git](https://git-scm.com/downloads) — to clone the repository.
 - [Visual Studio Code](https://code.visualstudio.com/) — recommended for editing Python files and laboratory exercises.
 
-Ensure Docker Desktop is running before proceeding.
+**Ensure Docker Desktop is running and your xServer before proceeding.**
 
 **Note:** The container uses ROS 2 Humble and includes the required Kinova packages. You do not need to install ROS 2 directly on your computer.
 
@@ -96,6 +96,17 @@ Run the container startup script supplied with the repository, after completing 
 
 The script is responsible for creating the Docker container, mounting your workspace and making the ROS 2 environment available.
 
+On windows the command to run the script is:
+```bash
+.\scripts\run_container.bat
+```
+
+You are going to need to attach multiple terminals to the docker container to do the exercises, you use this command to do this:
+```bash
+docker exec -it ros2_dev_container bash 
+```
+
+
 Once inside the container, verify the workspace:
 
 ```bash
@@ -137,7 +148,28 @@ This starts:
 
 **This setup does not require Gazebo or a physical robot.** The fake-hardware interfaces provide joint-state updates as commands are executed, but do not simulate realistic physical dynamics.
 
-Keep this terminal running while completing the laboratory exercises.
+You can run this setup with gazebo by running the following two commands in parallel - by opening a second terminal connected to the docker container to run the second command. 
+
+Run the Gazebo
+```bash
+ros2 launch kortex_bringup kortex_sim_control.launch.py \
+    robot_type:=gen3 \
+    dof:=6 \
+    sim_ignition:=true \
+    sim_gazebo:=false \
+    use_sim_time:=true \
+    launch_rviz:=false
+```
+
+Run Movit interface + rviz
+```bash 
+ros2 launch kinova_gen3_6dof_robotiq_2f_85_moveit_config sim.launch.py \
+    use_sim_time:=true \
+    launch_rviz:=true
+```
+
+**While completing the laboratory exercises you must have a moveit interface running, you can use the gazebo if your pc can handle it otherwise the hardware sim will suffice.**
+
 
 ## 7. Verify the robot is working
 
